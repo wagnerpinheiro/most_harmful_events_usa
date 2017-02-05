@@ -1,0 +1,192 @@
+---
+title: "NOAA Storm Analysis"
+subtitle: "Most Harmful Events in USA"
+author: Wagner Pinheiro
+date: February, 2017
+output: 
+  html_document: 
+    fig_height: 10
+    fig_width: 12
+    keep_md: yes
+---
+
+In this analysis, we will load and process the NOAA storm database to respond to the most damaging events in the United States for the last 10 years of data registries.
+
+## Introduction
+
+Storms and other severe weather events can cause both public health and economic problems for communities and municipalities. Many severe events can result in fatalities, injuries, and property damage, and preventing such outcomes to the extent possible is a key concern.
+
+This project involves exploring the U.S. National Oceanic and Atmospheric Administration's (NOAA) storm database. This database tracks characteristics of major storms and weather events in the United States, including when and where they occur, as well as estimates of any fatalities, injuries, and property damage.
+
+## Data Processing
+
+
+```{r, warning=FALSE}
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(tidyr))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(lubridate))
+suppressPackageStartupMessages(library(viridis))
+suppressPackageStartupMessages(library(scales))
+
+# convert big numbers to a power
+# thanks to [42-](http://stackoverflow.com/questions/28159936/formatting-large-currency-or-dollar-values-to-millions-billions)
+comprss <- function(tx) { 
+      div <- findInterval(as.numeric(gsub("\\,", "", tx)), 
+                          c(1, 1e3, 1e6, 1e9, 1e12) )
+      paste(round( as.numeric(gsub("\\,","",tx))/10^(3*(div-1)), 2), 
+           c("","K","M","B","T")[div] )}
+```
+
+Download the the zipped csv file with the dataset:
+```{r, cache=TRUE}
+# Set the default configuration settings
+Config <- c()
+Config$url <- 'https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2'
+Config$data_path <- "./data/"
+Config$file_zipped <- 'dataset.csv.bz2'
+filename = paste0(Config$data_path, Config$file_zipped)
+if(!file.exists(filename)){
+  if(!dir.exists(Config$data_path)){
+    dir.create(Config$data_path)
+  }
+  download.file(Config$url, filename)
+}
+paste('Compressed dataset size downloaded: ', trunc(file.size(filename) / (1024 ^ 2)), 'MB')
+```
+
+Loading the dataset:
+```{r, cache=TRUE}
+dataset <- read.csv(filename)
+dataset$BGN_DATE_D <- as.Date(dataset$BGN_DATE, format="%m/%d/%Y %T")
+dataset$END_DATE_D <- as.Date(dataset$END_DATE, format="%m/%d/%Y %T")
+str(dataset)
+```
+
+Calculate the most harmful events to population, for the last 10 years of the dataset:
+```{r}
+
+evt_harmful_pop <- dataset %>%
+  filter(BGN_DATE_D >= as.Date("2001-01-01")) %>%
+  mutate(harm=FATALITIES+INJURIES) %>%
+  group_by(EVTYPE) %>%
+  summarise(total_harm = sum(harm), injuries=sum(INJURIES), fatalities=sum(FATALITIES)) %>%
+  arrange(desc(total_harm)) %>%
+  #mutate(total_harm_k=paste0(round(total_harm / 1000,digits=1), 'K'))
+  mutate(total_harm_exp=comprss(total_harm))
+  
+head(evt_harmful_pop, 20)
+```
+
+Calculate the events with the greatest economic consequences, for the last 10 years of the dataset:
+
+
+```{r, warning=FALSE, message=FALSE}
+
+PROPDMGEXP_DF <- data.frame(
+  PROPDMGEXP=c("H","K","M","B"),
+  PROPDMG_POWER=c(10^2,10^3,10^6,10^9)
+)
+
+CROPDMGEXP_DF <- data.frame(
+  CROPDMGEXP=c("H","K","M","B"),
+  CROPDMG_POWER=c(10^2,10^3,10^6,10^9)
+)
+
+evt_economic <- dataset %>%
+  filter(BGN_DATE_D >= as.Date("2001-01-01")) %>%
+  select(EVTYPE, PROPDMG, PROPDMGEXP, CROPDMG, CROPDMGEXP) %>%
+  mutate(PROPDMGEXP=toupper(PROPDMGEXP), CROPDMGEXP=toupper(CROPDMGEXP)) %>%
+  left_join(PROPDMGEXP_DF) %>%
+  left_join(CROPDMGEXP_DF) %>%
+  mutate(PROPDMG_POWER=ifelse(is.na(PROPDMG_POWER),as.integer(PROPDMGEXP), PROPDMG_POWER)) %>%
+  mutate(CROPDMG_POWER=ifelse(is.na(CROPDMG_POWER),as.integer(CROPDMGEXP), CROPDMG_POWER)) %>%
+  mutate(PROPDMG_POWER=ifelse(PROPDMG_POWER==0,1, PROPDMG_POWER)) %>%
+  mutate(CROPDMG_POWER=ifelse(CROPDMG_POWER==0,1, CROPDMG_POWER)) %>%
+  mutate(PROPDMG_POWER=ifelse(is.na(PROPDMG_POWER),1, PROPDMG_POWER)) %>%
+  mutate(CROPDMG_POWER=ifelse(is.na(CROPDMG_POWER),1, CROPDMG_POWER)) %>%
+  mutate(PROPDMG_REAL=PROPDMG * PROPDMG_POWER, CROPDMG_REAL=CROPDMG * CROPDMG_POWER) %>%
+  mutate(DMG_TOTAL=PROPDMG_REAL + CROPDMG_REAL) %>%
+  group_by(EVTYPE) %>%
+  summarise_each(funs(sum), DMG_TOTAL, PROPDMG_REAL, CROPDMG_REAL) %>%
+  arrange(desc(DMG_TOTAL)) %>%
+  # mutate(DMG_TOTAL_EXP=paste0(round(DMG_TOTAL / 10^6,digits=1), 'M'))
+  mutate(DMG_TOTAL_EXP=comprss(DMG_TOTAL))
+
+
+head(evt_economic,20)
+```
+
+
+
+## Results
+
+1. Across the United States, which types of events (as indicated in the 𝙴𝚅𝚃𝚈𝙿𝙴 variable) are most harmful with respect to population health?
+
+```{r}
+# to-do: prepare data to stack bars
+# evt_harmful_pop <- evt_harmful_pop[1:20,] %>%
+  #gather(type_harm, count, injuries, fatalities)
+
+ggplot(evt_harmful_pop[1:20,], aes(x=reorder(EVTYPE, total_harm), y=total_harm)) +
+  geom_bar(stat='identity', col="gray", fill="red", width=0.5) +
+  coord_flip() + 
+  ggtitle("Most Harmful Events in the USA (2001-2011)") +
+  xlab("Event Type") + 
+  ylab("Affected Population") + 
+  geom_text(aes(label=total_harm_exp), hjust=-0.1, size=3)
+```
+
+ +
+  scale_y_continuous(breaks= pretty_breaks())
+1. Across the United States, which types of events have the greatest economic consequences?
+
+```{r}
+ggplot(evt_economic[1:20,], aes(x=reorder(EVTYPE, DMG_TOTAL), y=DMG_TOTAL)) +
+  geom_bar(stat='identity', col="gray", fill="green", width=0.5) +
+  coord_flip() + 
+  ggtitle("Economic Consequences by Events (2001-2011)") +
+  xlab("Event Type") + 
+  ylab("Total Expense (USD)") + 
+  geom_text(aes(label=DMG_TOTAL_EXP), hjust=-0.1, size=3)
+```
+
+Heatmap of affected pouplation by month:
+
+```{r, warning=FALSE, message=FALSE}
+
+full_top_evt <- dataset %>%
+  filter(BGN_DATE_D >= as.Date("2001-01-01")) %>%
+  select(EVTYPE, PROPDMG, PROPDMGEXP, CROPDMG, CROPDMGEXP, INJURIES, FATALITIES, BGN_DATE_D) %>%
+  mutate(PROPDMGEXP=toupper(PROPDMGEXP), CROPDMGEXP=toupper(CROPDMGEXP)) %>%
+  left_join(PROPDMGEXP_DF) %>%
+  left_join(CROPDMGEXP_DF) %>%
+  mutate(PROPDMG_POWER=ifelse(is.na(PROPDMG_POWER),as.integer(PROPDMGEXP), PROPDMG_POWER)) %>%
+  mutate(CROPDMG_POWER=ifelse(is.na(CROPDMG_POWER),as.integer(CROPDMGEXP), CROPDMG_POWER)) %>%
+  mutate(PROPDMG_POWER=ifelse(PROPDMG_POWER==0,1, PROPDMG_POWER)) %>%
+  mutate(CROPDMG_POWER=ifelse(CROPDMG_POWER==0,1, CROPDMG_POWER)) %>%
+  mutate(PROPDMG_POWER=ifelse(is.na(PROPDMG_POWER),1, PROPDMG_POWER)) %>%
+  mutate(CROPDMG_POWER=ifelse(is.na(CROPDMG_POWER),1, CROPDMG_POWER)) %>%
+  mutate(PROPDMG_REAL=PROPDMG * PROPDMG_POWER, CROPDMG_REAL=CROPDMG * CROPDMG_POWER) %>%
+  mutate(DMG_TOTAL=PROPDMG_REAL + CROPDMG_REAL) %>%
+  mutate(HARM_TOTAL=FATALITIES+INJURIES) %>%
+  mutate(MONTH=month(BGN_DATE_D)) %>%
+  filter(HARM_TOTAL > 0, DMG_TOTAL > 0) %>%
+  group_by(MONTH, EVTYPE) %>%
+  summarise_each(funs(sum), HARM_TOTAL, DMG_TOTAL) %>%
+  arrange(desc(HARM_TOTAL), desc(DMG_TOTAL)) %>%
+  mutate(HARM_TOTAL_EXP=comprss(HARM_TOTAL)) %>%
+  mutate(DMG_TOTAL_EXP=comprss(DMG_TOTAL))
+
+ggplot(full_top_evt, aes(MONTH, reorder(EVTYPE,-HARM_TOTAL) )) +
+  geom_tile(aes(fill = HARM_TOTAL), color = "white") +
+  scale_fill_viridis("Population") +
+  scale_x_continuous(breaks=c(1:12), labels=c(1:12)) + #labels=month.name
+  ggtitle("Distribution of Population Affected by Events (2001-2011)")+
+  ylab("events") +
+  xlab("month")
+  
+```
+
+
+Tornadoes are the biggest cause of threats to the population and to those causing great financial damage. Although they occur throughout the year, their greatest activity occurs in the months of March to May.
